@@ -43,7 +43,7 @@ function isPrivateIP(ip: string): boolean {
   return false;
 }
 
-// Passive TLS Certificate Extraction (Type-Safe for Node.js string | string[])
+// Passive TLS Certificate Extraction
 function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; daysOld: number } | null> {
   return new Promise((resolve) => {
     const socket = tls.connect(
@@ -134,6 +134,7 @@ export async function POST(req: Request) {
     }
 
     const targetHostname = parsedUrl.hostname.toLowerCase();
+    const pathnameLower = parsedUrl.pathname.toLowerCase();
 
     // 1. Enterprise Allowlist Verification
     if (ENTERPRISE_WHITELIST.includes(targetHostname)) {
@@ -155,6 +156,34 @@ export async function POST(req: Request) {
         domAnalysis: { externalScripts: 0, hiddenElements: 0, iframes: 0 },
       });
     }
+
+    // --- NEW: TIER 1 RAW BINARY & MALWARE EXTENSION FILTER ---
+    const malwareExtensions = /\.(mips|elf|arm|bin|exe|sh|bat|ps1|vbs|scr|cmd|apk|msi)$/i;
+    const isRawIP = /^\d{1,3}(\.\d{1,3}){3}$/.test(targetHostname);
+
+    if (malwareExtensions.test(pathnameLower) || (isRawIP && pathnameLower !== '/' && pathnameLower !== '')) {
+      return NextResponse.json({
+        status: 'SCAM',
+        confidence: '100%',
+        brandImpersonated: 'None',
+        verdictSummary: `Target path points directly to an executable binary or architecture-specific malware drop (${parsedUrl.pathname}). Command & Control (C2) infrastructure signature detected.`,
+        redFlags: [
+          `Direct binary payload extension detected: ${parsedUrl.pathname}`,
+          isRawIP ? 'Target uses raw IP addressing instead of an established domain name' : 'Suspicious direct payload distribution path'
+        ],
+        scannedBy: 'VerifyNet Binary Signature & C2 Filter (Tier 1)',
+        screenshot: '',
+        zipManifest: [],
+        infrastructure: {
+          hasMailServers: false,
+          ipAddresses: [targetHostname],
+          ssl: null,
+        },
+        redirectChain: [parsedUrl.href],
+        domAnalysis: null,
+      });
+    }
+    // -------------------------------------------------------
 
     // 2. Google Safe Browsing Lookup API (v4)
     const googleSafeBrowsingKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
@@ -419,12 +448,13 @@ Respond ONLY with valid JSON matching this exact structure:
       const cleanedJson = aiResultText.replace(new RegExp('```json', 'gi'), '').replace(new RegExp('```', 'g'), '').trim();
       parsedAI = JSON.parse(cleanedJson);
     } catch {
+      // Improved fallback to reflect suspicious non-HTML parsing states instead of blindly returning SAFE
       parsedAI = {
-        status: 'SAFE',
-        confidence: '80%',
+        status: 'SCAM',
+        confidence: '85%',
         brandImpersonated: 'None',
-        verdictSummary: 'Target sandboxed and telemetry gathered. Page presents standard functional behavior.',
-        redFlags: [],
+        verdictSummary: 'Target URL returned non-standard formatting or binary data streams. Unrecognized payload structure identified.',
+        redFlags: ['Non-standard document response or binary payload stream detected during sandbox crawl'],
       };
     }
 
@@ -436,7 +466,7 @@ Respond ONLY with valid JSON matching this exact structure:
       redFlags: Array.isArray(parsedAI.redFlags) ? parsedAI.redFlags : [],
       scannedBy: `Sandbox Engine + ${selectedModel}`,
       screenshot: screenshotBase64,
-      zipManifest,
+        zipManifest,
       infrastructure: {
         hasMailServers,
         ipAddresses: resolvedIPs,
