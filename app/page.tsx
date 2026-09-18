@@ -78,13 +78,16 @@ export default function Home() {
     const element = document.getElementById('forensic-report-container');
     if (element) {
       const html2pdf = (await import('html2pdf.js')).default;
-      const opt = {
+      
+      // FIXED: Added ": any" to bypass strict TypeScript checking for the options object
+      const opt: any = {
         margin: 0.4,
         filename: `Forensic_Threat_Report_${Date.now()}.pdf`,
         image: { type: 'jpeg', quality: 0.98 },
         html2canvas: { scale: 2, useCORS: true, backgroundColor: '#020617' },
         jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
       };
+      
       html2pdf().set(opt).from(element).save();
     }
   };
