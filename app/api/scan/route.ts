@@ -43,7 +43,7 @@ function isPrivateIP(ip: string): boolean {
   return false;
 }
 
-// Passive TLS Certificate Extraction
+// Passive TLS Certificate Extraction (Type-Safe for Node.js string | string[])
 function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; daysOld: number } | null> {
   return new Promise((resolve) => {
     const socket = tls.connect(
@@ -54,9 +54,12 @@ function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; 
           if (cert && cert.valid_from) {
             const validFrom = new Date(cert.valid_from).getTime();
             const daysOld = Math.max(0, Math.floor((Date.now() - validFrom) / (1000 * 60 * 60 * 24)));
-            const issuer = cert.issuer ? (cert.issuer.O || cert.issuer.CN || 'Standard CA') : 'Standard CA';
+            
+            const rawIssuer = cert.issuer ? (cert.issuer.O || cert.issuer.CN || 'Standard CA') : 'Standard CA';
+            const issuer = Array.isArray(rawIssuer) ? (rawIssuer[0] || 'Standard CA') : (rawIssuer || 'Standard CA');
+
             socket.end();
-            return resolve({ issuer, daysOld });
+            return resolve({ issuer: String(issuer), daysOld });
           }
         } catch {
           // Pass through on parsing failure
