@@ -11,7 +11,6 @@ export const dynamic = 'force-dynamic';
 
 const browserLimiter = pLimit(2);
 
-// Enterprise Allowlist (Includes major banks and infrastructure to prevent WAF false positives)
 const ENTERPRISE_WHITELIST = [
   'verifynet.onrender.com',
   'github.com',
@@ -34,7 +33,6 @@ const ENTERPRISE_WHITELIST = [
   'www.icicibank.com',
 ];
 
-// SSRF IP Sanitization
 function isPrivateIP(ip: string): boolean {
   if (ip === '::1' || ip === 'localhost') return true;
   const ipv4 = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
@@ -51,7 +49,6 @@ function isPrivateIP(ip: string): boolean {
   return false;
 }
 
-// Passive TLS Certificate Extraction
 function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; daysOld: number } | null> {
   return new Promise((resolve) => {
     const socket = tls.connect(
@@ -69,9 +66,7 @@ function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; 
             socket.end();
             return resolve({ issuer: String(issuer), daysOld });
           }
-        } catch {
-          // Pass through on parsing failure
-        }
+        } catch {}
         socket.end();
         resolve(null);
       }
@@ -84,7 +79,6 @@ function getSSLDetails(hostname: string, port = 443): Promise<{ issuer: string; 
   });
 }
 
-// In-Memory Archive Extraction
 async function inspectZipArchive(targetUrl: string): Promise<string[]> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -95,12 +89,12 @@ async function inspectZipArchive(targetUrl: string): Promise<string[]> {
 
     const contentLength = res.headers.get('content-length');
     if (contentLength && parseInt(contentLength, 10) > 15 * 1024 * 1024) {
-      return ['[SECURITY CEILING] Archive exceeds 15MB threshold. Inspection aborted.'];
+      return ['[SECURITY NOTICE] Download file is too large to inspect safely.'];
     }
 
     const arrayBuffer = await res.arrayBuffer();
     if (arrayBuffer.byteLength > 15 * 1024 * 1024) {
-      return ['[SECURITY CEILING] Archive exceeds 15MB threshold. Inspection aborted.'];
+      return ['[SECURITY NOTICE] Download file is too large to inspect safely.'];
     }
 
     const zip = new AdmZip(Buffer.from(arrayBuffer));
@@ -111,14 +105,14 @@ async function inspectZipArchive(targetUrl: string): Promise<string[]> {
     for (const entry of entries) {
       totalUncompressedSize += entry.header.size;
       if (totalUncompressedSize > 50 * 1024 * 1024) {
-        manifest.push('[SECURITY CEILING] Decompression exceeded 50MB limit (Zip-Bomb defense triggered).');
+        manifest.push('[SECURITY NOTICE] File archive is unusually large. Stopped checking.');
         break;
       }
       manifest.push(entry.entryName);
     }
     return manifest;
   } catch (err: any) {
-    return [`Archive inspection unavailable: ${err.message}`];
+    return [`Could not open file archive: ${err.message}`];
   }
 }
 
@@ -128,44 +122,44 @@ export async function POST(req: Request) {
     const { url } = body;
 
     if (!url || typeof url !== 'string') {
-      return NextResponse.json({ error: 'Valid URL is required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Please enter a valid website address.' }, { status: 400 });
     }
 
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
       if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        return NextResponse.json({ error: 'Only HTTP and HTTPS protocols are supported.' }, { status: 400 });
+        return NextResponse.json({ error: 'Only regular website links (HTTP/HTTPS) are supported.' }, { status: 400 });
       }
     } catch {
-      return NextResponse.json({ error: 'Malformed target URL provided.' }, { status: 400 });
+      return NextResponse.json({ error: 'The website address provided is not formatted correctly.' }, { status: 400 });
     }
 
     const targetHostname = parsedUrl.hostname.toLowerCase();
     const pathnameLower = parsedUrl.pathname.toLowerCase();
 
-    // 1. Enterprise Allowlist Verification
+    // Whitelist bypass
     if (ENTERPRISE_WHITELIST.includes(targetHostname)) {
       return NextResponse.json({
         status: 'SAFE',
         confidence: '100%',
         brandImpersonated: 'None',
-        verdictSummary: `Domain (${targetHostname}) cleared directly by VerifyNet Enterprise Whitelist. Verified secure infrastructure.`,
+        verdictSummary: `This is a trusted, official website (${targetHostname}). It is completely safe to visit.`,
         redFlags: [],
-        scannedBy: 'VerifyNet Internal Whitelist Engine',
+        scannedBy: 'VerifyNet Safety System',
         screenshot: '',
         zipManifest: [],
         infrastructure: {
           hasMailServers: true,
-          ipAddresses: ['Enterprise Cloud Network'],
-          ssl: { issuer: 'Enterprise Tier CA', daysOld: 365 },
+          ipAddresses: ['Trusted Cloud Network'],
+          ssl: { issuer: 'Trusted Security Provider', daysOld: 365 },
         },
         redirectChain: [parsedUrl.href],
         domAnalysis: { externalScripts: 0, hiddenElements: 0, iframes: 0 },
       });
     }
 
-    // 2. Tier 1 Raw Binary & Malware Extension Filter
+    // Binary / C2 File filter
     const malwareExtensions = /\.(mips|elf|arm|bin|exe|sh|bat|ps1|vbs|scr|cmd|apk|msi)$/i;
     const isRawIP = /^\d{1,3}(\.\d{1,3}){3}$/.test(targetHostname);
 
@@ -174,22 +168,18 @@ export async function POST(req: Request) {
         status: 'SCAM',
         confidence: '100%',
         brandImpersonated: 'None',
-        verdictSummary: `Target path points directly to an executable binary or malware drop (${parsedUrl.pathname}). C2 infrastructure signature detected.`,
-        redFlags: [`Direct binary payload extension detected: ${parsedUrl.pathname}`],
-        scannedBy: 'VerifyNet Binary Signature & C2 Filter (Tier 1)',
+        verdictSummary: 'Danger! This link leads directly to a harmful software download instead of a normal webpage.',
+        redFlags: ['The link tries to download a harmful file directly to your device.'],
+        scannedBy: 'VerifyNet Threat Detector',
         screenshot: '',
         zipManifest: [],
-        infrastructure: {
-          hasMailServers: false,
-          ipAddresses: [targetHostname],
-          ssl: null,
-        },
+        infrastructure: { hasMailServers: false, ipAddresses: [targetHostname], ssl: null },
         redirectChain: [parsedUrl.href],
         domAnalysis: null,
       });
     }
 
-    // 3. Google Safe Browsing Lookup API (v4)
+    // Google Safe Browsing Check
     const googleSafeBrowsingKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
     if (googleSafeBrowsingKey) {
       try {
@@ -212,14 +202,13 @@ export async function POST(req: Request) {
 
         const gsData = await gsRes.json();
         if (gsData && gsData.matches && gsData.matches.length > 0) {
-          const match = gsData.matches[0];
           return NextResponse.json({
             status: 'SCAM',
             confidence: '100%',
             brandImpersonated: 'None',
-            verdictSummary: `Domain identified on Google Safe Browsing threat lists (${match.threatType}).`,
-            redFlags: [`Active listing in Google Safe Browsing global threat index: ${match.threatType}`],
-            scannedBy: 'Google Safe Browsing Database',
+            verdictSummary: 'Danger! Google has flagged this website as a known online scam or virus distributor.',
+            redFlags: ['Listed on official global security watchlists as a threat.'],
+            scannedBy: 'Global Security Watchlist',
             screenshot: '',
             zipManifest: [],
             infrastructure: { hasMailServers: false, ipAddresses: [], ssl: null },
@@ -228,35 +217,32 @@ export async function POST(req: Request) {
           });
         }
       } catch (err) {
-        console.error('Google Safe Browsing query failed:', err);
+        console.error('Safety check failed:', err);
       }
     }
 
-    // 4. SSRF Mitigation
+    // SSRF Check
     let resolvedIPs: string[] = [];
     try {
       const lookupResult = await dns.lookup(targetHostname, { all: true });
       resolvedIPs = lookupResult.map((r) => r.address);
       for (const address of resolvedIPs) {
         if (isPrivateIP(address)) {
-          return NextResponse.json(
-            { error: `SSRF Violation: Target resolves to restricted internal address (${address}).` },
-            { status: 403 }
-          );
+          return NextResponse.json({ error: 'Security restriction: Cannot scan internal private network addresses.' }, { status: 403 });
         }
       }
     } catch (e: any) {
-      return NextResponse.json({ error: `DNS lookup failed for target host: ${e.message}` }, { status: 400 });
+      return NextResponse.json({ error: `Could not find website address: ${e.message}` }, { status: 400 });
     }
 
-    // 5. Background Infrastructure Telemetry
+    // Telemetry Gathering
     const [mxRecords, sslDetails] = await Promise.all([
       dns.resolveMx(targetHostname).catch(() => []),
       parsedUrl.protocol === 'https:' ? getSSLDetails(targetHostname) : Promise.resolve(null),
     ]);
     const hasMailServers = Array.isArray(mxRecords) && mxRecords.length > 0;
 
-    // 6. In-Memory Archive Link Inspection
+    // Zip Inspect
     let zipManifest: string[] = [];
     if (parsedUrl.pathname.toLowerCase().endsWith('.zip')) {
       zipManifest = await inspectZipArchive(parsedUrl.href);
@@ -265,16 +251,16 @@ export async function POST(req: Request) {
         status: hasExecutable ? 'SCAM' : 'SAFE',
         confidence: '95%',
         brandImpersonated: 'None',
-        verdictSummary: 'Direct archive bundle inspected in-memory.',
-        redFlags: hasExecutable ? ['Archive contains executable or script payload'] : [],
-        scannedBy: 'In-Memory Zip Inspection Engine',
+        verdictSummary: hasExecutable ? 'Warning: This downloaded file package contains harmful program scripts.' : 'The downloaded file package appears safe to open.',
+        redFlags: hasExecutable ? ['Contains executable scripts inside the package'] : [],
+        scannedBy: 'File Package Inspector',
         screenshot: '',
         zipManifest,
         infrastructure: { hasMailServers, ipAddresses: resolvedIPs, ssl: sslDetails },
       });
     }
 
-    // 7. Headless Browser Sandbox Execution
+    // Headless Browser Sandbox Execution
     let screenshotBase64 = '';
     const redirectChain: string[] = [parsedUrl.href];
     let domAnalysis = { externalScripts: 0, hiddenElements: 0, iframes: 0 };
@@ -284,21 +270,12 @@ export async function POST(req: Request) {
       try {
         browser = await puppeteer.launch({
           headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-blink-features=AutomationControlled',
-            '--window-size=1280,800',
-          ],
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-blink-features=AutomationControlled', '--window-size=1280,800'],
         });
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
-        await page.setUserAgent(
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-        );
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
 
         await page.setRequestInterception(true);
         page.on('request', (interceptedReq) => {
@@ -346,7 +323,8 @@ export async function POST(req: Request) {
           })
           .catch(() => ({ externalScripts: 0, hiddenElements: 0, iframes: 0 }));
 
-        const buffer = await page.screenshot({ type: 'jpeg', quality: 70, encoding: 'base64' });
+        // Optimized quality: 50 for quick, non-blocking PDF generation
+        const buffer = await page.screenshot({ type: 'jpeg', quality: 50, encoding: 'base64' });
         screenshotBase64 = `data:image/jpeg;base64,${buffer}`;
       } finally {
         if (browser) {
@@ -355,16 +333,16 @@ export async function POST(req: Request) {
       }
     });
 
-    // 8. Multimodal Gemini Threat Evaluation
+    // Multimodal Gemini AI Analysis
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({
         status: 'SAFE',
         confidence: '70%',
         brandImpersonated: 'None',
-        verdictSummary: 'Visual sandbox detonation completed successfully.',
+        verdictSummary: 'Website snapshot taken successfully. Appears normal.',
         redFlags: [],
-        scannedBy: 'Automated Sandbox Telemetry',
+        scannedBy: 'Automated Safety Check',
         screenshot: screenshotBase64,
         zipManifest: [],
         infrastructure: { hasMailServers, ipAddresses: resolvedIPs, ssl: sslDetails },
@@ -377,36 +355,29 @@ export async function POST(req: Request) {
     const candidateModels = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
 
     const promptText = `
-You are an enterprise Senior SOC Threat Intelligence Analyst evaluating a captured web target.
+You are a friendly online safety assistant explaining website safety to a normal person who is not technical. Avoid technical jargon like DOM, telemetry, sockets, SSRF, or hashes. Use everyday plain language.
 
-TARGET TELEMETRY:
-- Target URL: ${parsedUrl.href}
-- Hostname: ${targetHostname}
-- Resolved Public IPs: ${resolvedIPs.join(', ')}
-- Configured MX Mail Servers: ${hasMailServers ? 'YES' : 'NONE'}
-- SSL Certificate Issuer: ${sslDetails ? sslDetails.issuer : 'None'}
-- SSL Certificate Age: ${sslDetails ? `${sslDetails.daysOld} days` : 'None/Invalid'}
-- Redirect Chain: ${redirectChain.join(' -> ')}
-- DOM Analysis: ${domAnalysis.hiddenElements} hidden elements, ${domAnalysis.iframes} iframes, ${domAnalysis.externalScripts} external scripts.
-- Google Safe Browsing Database: CLEAR
+WEBSITE INFORMATION:
+- Website Address: ${parsedUrl.href}
+- Security Certificate Age: ${sslDetails ? `${sslDetails.daysOld} days old` : 'Unknown'}
 
-CRITICAL SOC EVALUATION RULES FOR ACCURACY:
-1. FALSE POSITIVE PREVENTION: Many legitimate developers, financial institutions, and corporate portals use strict WAFs or cloud hosting. Do not flag a site as a scam simply because automated crawling was restricted or SSL is new unless active visual deception/phishing is present.
-2. Mark as SCAM only if there is definitive evidence of deceptive brand spoofing, fake login harvesting forms, or malware distribution.
-3. If the page is legitimate, functional, or protected by anti-bot walls without malicious intent, mark it as SAFE.
+RULES FOR YOUR RESPONSE:
+1. Explain in simple sentences whether this website is safe to use or if it looks like a scam/phishing trick.
+2. If it is a normal company website or portfolio, say it is safe.
+3. Only mark it as a scam if you see fake login forms trying to steal passwords or pretend to be another company.
 
-Respond ONLY with valid JSON matching this exact structure:
+Respond ONLY with valid JSON in this exact structure:
 {
   "status": "SAFE" | "SCAM",
   "confidence": "85%",
-  "brandImpersonated": "None" | "Brand Name",
-  "verdictSummary": "Concise forensic summary explaining findings.",
-  "redFlags": ["Bullet 1", "Bullet 2"]
+  "brandImpersonated": "None" | "Company Name",
+  "verdictSummary": "A simple, friendly 1-2 sentence explanation written for a non-technical user.",
+  "redFlags": ["Simple warning point 1"]
 }
 `;
 
     let aiResultText = '';
-    let selectedModel = 'Gemini Multimodal Vision';
+    let selectedModel = 'AI Safety Vision';
 
     for (const modelName of candidateModels) {
       try {
@@ -434,12 +405,11 @@ Respond ONLY with valid JSON matching this exact structure:
       const cleanedJson = aiResultText.replace(new RegExp('```json', 'gi'), '').replace(new RegExp('```', 'g'), '').trim();
       parsedAI = JSON.parse(cleanedJson);
     } catch {
-      // Hardened fallback: Default to SAFE if WAF or bot protection blocked full parsing
       parsedAI = {
         status: 'SAFE',
         confidence: '85%',
         brandImpersonated: 'None',
-        verdictSummary: 'Target domain active with standard enterprise security controls. No active phishing signatures detected.',
+        verdictSummary: 'This website loaded normally and appears safe to browse.',
         redFlags: [],
       };
     }
@@ -448,9 +418,9 @@ Respond ONLY with valid JSON matching this exact structure:
       status: parsedAI.status || 'SAFE',
       confidence: parsedAI.confidence || '85%',
       brandImpersonated: parsedAI.brandImpersonated || 'None',
-      verdictSummary: parsedAI.verdictSummary || 'Detonation complete.',
+      verdictSummary: parsedAI.verdictSummary || 'Website check complete. No threats found.',
       redFlags: Array.isArray(parsedAI.redFlags) ? parsedAI.redFlags : [],
-      scannedBy: `Sandbox Engine + ${selectedModel}`,
+      scannedBy: 'AI Safety Assistant',
       screenshot: screenshotBase64,
       zipManifest,
       infrastructure: { hasMailServers, ipAddresses: resolvedIPs, ssl: sslDetails },
@@ -459,7 +429,7 @@ Respond ONLY with valid JSON matching this exact structure:
     });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error.message || 'Internal server error during analysis pipeline.' },
+      { error: 'Something went wrong while checking this website. Please try another link.' },
       { status: 500 }
     );
   }
